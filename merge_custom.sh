@@ -221,14 +221,36 @@ recursive_merge_subfolders() {
                 
                 # Спрашиваем подтверждение
                 echo
-                read -p "Объединить эти подпапки? (y/n): " confirm
+                echo -n "Объединить эти подпапки? (y/n): "
+                read confirm
+                log_info "Пользователь ввел: '$confirm'"
+                
                 if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                    merge_subfolders_by_prefix "$current_folder" "$common_prefix" "${matching_folders[@]}"
+                    log_info "Начинаю процесс объединения..."
+                    
+                    # Создаем массив только с папками которые нужно объединить
+                    local folders_to_merge=()
+                    for folder in "${matching_folders[@]}"; do
+                        [[ "$folder" != "$common_prefix" ]] && folders_to_merge+=("$folder")
+                    done
+                    
+                    log_info "Папок для объединения: ${#folders_to_merge[@]}"
+                    [[ ${#folders_to_merge[@]} -eq 0 ]] && {
+                        log_warning "Нет папок для объединения (пропускаем)"
+                        continue
+                    }
+                    
+                    # Объединяем в папку с общим префиксом
+                    log_info "Вызываю merge_subfolders_by_prefix..."
+                    merge_subfolders_by_prefix "$current_folder" "$common_prefix" "${folders_to_merge[@]}"
                     merged_any=true
+                    log_info "Завершил merge_subfolders_by_prefix"
+                else
+                    log_info "Пользователь отказался от объединения"
                 fi
             }
         fi
-    done < "$temp_file"
+    done
     
     rm -f "$temp_file"
     
@@ -247,20 +269,32 @@ merge_subfolders_by_prefix() {
     local folders=("$@")
     local target_folder="${parent_folder}/${prefix}"
     
-    # Создаем целевую папку
-    [[ ! -d "$target_folder" ]] && mkdir -p "$target_folder"
+    log_info "Начинаю объединение: parent=$parent_folder, prefix=$prefix, folders=${#folders[@]}"
+    
+    # Если целевая папка не существует, создаем ее
+    if [[ ! -d "$target_folder" ]]; then
+        mkdir -p "$target_folder"
+        log_info "Создана папка: $(basename "$target_folder")"
+    fi
     
     log_info "Объединяю подпапки в '$(basename "$target_folder")'"
     
     # Перемещаем содержимое
     for folder in "${folders[@]}"; do
         local full_path="${parent_folder}/${folder}"
+        log_info "Проверяю папку: $full_path"
+        
         [[ "$full_path" == "$target_folder" ]] && continue
+        [[ ! -d "$full_path" ]] && {
+            log_warning "Папка не существует: $full_path"
+            continue
+        }
         
         local folder_name=$(basename "$full_path")
         log_info "Перемещаю из подпапки: $folder_name"
         
         # Перемещаем все файлы и подпапки
+        local items_moved=0
         for item in "$full_path"/*; do
             [[ -e "$item" ]] || continue
             local item_name=$(basename "$item")
@@ -280,7 +314,10 @@ merge_subfolders_by_prefix() {
             done
             
             mv "$item" "$dest_path"
+            items_moved=$((items_moved + 1))
         done
+        
+        log_info "Перемещено $items_moved элементов из $folder_name"
         
         # Удаляем пустую папку
         rmdir "$full_path" 2>/dev/null || true
