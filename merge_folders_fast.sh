@@ -31,70 +31,211 @@ find_longest_prefix() {
     echo "$common"
 }
 
-# Fast folder grouping using hash table by first 1-3 chars
+# Fast folder grouping with two-level logic
 find_similar_fast() {
-    log_info "Поиск папок (быстрый алгоритм)..."
+    log_info "Поиск папок (двухуровневый алгоритм)..."
     
-    # Get all folder names and paths
-    local temp_file="/tmp/folders_$$"
-    find "$WORK_DIR" -type d -not -path "$WORK_DIR" -printf "%f|%p\n" 2>/dev/null | sort > "$temp_file"
+    # Level 1: Parent folders (longest matches)
+    log_info "Проверка родительских папок (1 уровень)..."
+    find_parent_matches
+    
+    # Level 2+: Subfolders (exact matches only)
+    log_info "Проверка подпапок (точные совпадения)..."
+    find_subfolder_matches
+}
+
+# Find matches in parent folders (level 1)
+find_parent_matches() {
+    local temp_file="/tmp/parent_folders_$$"
+    find "$WORK_DIR" -maxdepth 1 -type d -not -path "$WORK_DIR" -printf "%f|%p\n" 2>/dev/null | sort > "$temp_file"
     
     local total=$(wc -l < "$temp_file")
-    log_info "Найдено папок: $total"
+    [[ $total -eq 0 ]] && { rm -f "$temp_file"; return; }
     
-    # Create hash table: prefix -> folder paths
-    declare -A hash_1  # first char
-    declare -A hash_2  # first 2 chars  
-    declare -A hash_3  # first 3 chars
+    log_info "Родительских папок: $total"
     
-    # Build hash tables
+    # Show found folders for debugging
+    echo "Найденные папки:"
+    while IFS='|' read -r name path; do
+        echo "  - $name"
+    done < "$temp_file"
+    
+    # Hash table for parent folders
+    declare -A hash_1 hash_2 hash_3
+    
     while IFS='|' read -r name path; do
         [[ ${#name} -lt 3 ]] && continue
         
-        local prefix1="${name:0:1}"
-        local prefix2="${name:0:2}"  
-        local prefix3="${name:0:3}"
-        
-        hash_1["$prefix1"]+="$path|"
-        hash_2["$prefix2"]+="$path|"
-        hash_3["$prefix3"]+="$path|"
+        hash_1["${name:0:1}"]+="$path|"
+        hash_2["${name:0:2}"]+="$path|"
+        hash_3["${name:0:3}"]+="$path|"
     done < "$temp_file"
     
     rm -f "$temp_file"
     
     local merged_any=false
     
-    # Check hash tables for potential matches
+    # Debug hash tables
+    echo "Группы по 3 символам:"
     for prefix in "${!hash_3[@]}"; do
         local paths="${hash_3[$prefix]}"
         local path_array=(${paths//|/ })
-        
         if [[ ${#path_array[@]} -gt 1 ]]; then
-            check_and_merge_group "${path_array[@]}" "$merged_any"
+            echo "  Префикс '$prefix': ${#path_array[@]} папок"
+            merge_parent_group "${path_array[@]}" "$merged_any"
         fi
     done
     
     for prefix in "${!hash_2[@]}"; do
         local paths="${hash_2[$prefix]}"
         local path_array=(${paths//|/ })
-        
         if [[ ${#path_array[@]} -gt 1 ]]; then
-            check_and_merge_group "${path_array[@]}" "$merged_any"
+            echo "  Префикс '$prefix': ${#path_array[@]} папок"
+            merge_parent_group "${path_array[@]}" "$merged_any"
         fi
     done
     
     for prefix in "${!hash_1[@]}"; do
         local paths="${hash_1[$prefix]}"
         local path_array=(${paths//|/ })
-        
         if [[ ${#path_array[@]} -gt 1 ]]; then
-            check_and_merge_group "${path_array[@]}" "$merged_any"
+            echo "  Префикс '$prefix': ${#path_array[@]} папок"
+            merge_parent_group "${path_array[@]}" "$merged_any"
         fi
     done
     
     if [[ "$merged_any" == false ]]; then
         log_info "Подходящих папок для объединения не найдено"
     fi
+}
+
+# Merge parent folders to common folder
+merge_parent_group() {
+    local folders=("$@")
+    local last_idx=$((${#folders[@]} - 1))
+    local merged_any_ref="${folders[$last_idx]}"
+    unset "folders[$last_idx]"
+    
+    echo "DEBUG: Получено папок для обработки: ${#folders[@]}"
+    for folder in "${folders[@]}"; do
+        echo "DEBUG: - $(basename "$folder")"
+    done
+    
+    # Find longest common prefix among all folder names
+    local common_prefix=""
+    if [[ ${#folders[@]} -gt 0 ]]; then
+        common_prefix=$(basename "${folders[0]}")
+        echo "DEBUG: Начальный префикс: '$common_prefix'"
+        for ((i=1; i<${#folders[@]}; i++)); do
+            local next_name=$(basename "${folders[i]}")
+            echo "DEBUG: Сравниваем '$common_prefix' с '$next_name'"
+            common_prefix=$(find_longest_prefix "$common_prefix" "$next_name")
+            echo "DEBUG: Новый префикс: '$common_prefix'"
+        done
+    fi
+    
+    echo "DEBUG: Итоговый префикс: '$common_prefix' (длина: ${#common_prefix})"
+    
+    # Only merge if we have a meaningful common prefix
+    if [[ ${#common_prefix} -lt 3 ]]; then
+        echo "DEBUG: Префикс слишком короткий, пропускаем"
+        return 0
+    fi
+    
+    log_info "Найдена группа родителей: '$common_prefix'"
+    for folder in "${folders[@]}"; do
+        echo "  - $(basename "$folder")"
+    done
+    
+    read -p "Объединить в папку '$common_prefix'? (y/n): " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        # Create target folder with common prefix name
+        local target_folder="${WORK_DIR}/${common_prefix}"
+        if [[ -d "$target_folder" ]]; then
+            local counter=1
+            while [[ -d "${WORK_DIR}/${common_prefix}_${counter}" ]]; do
+                counter=$((counter + 1))
+            done
+            target_folder="${WORK_DIR}/${common_prefix}_${counter}"
+        fi
+        
+        mkdir -p "$target_folder"
+        log_info "Создана папка: $(basename "$target_folder")"
+        
+        # Move content from all parent folders
+        for folder in "${folders[@]}"; do
+            [[ ! -d "$folder" ]] && continue
+            
+            log_info "Перемещение содержимого из $(basename "$folder")"
+            
+            for item in "$folder"/*; do
+                [[ -e "$item" ]] || continue
+                local item_name=$(basename "$item")
+                local dest_path="${target_folder}/${item_name}"
+                
+                # Handle conflicts
+                local counter=1
+                while [[ -e "$dest_path" ]]; do
+                    if [[ -d "$item" ]]; then
+                        dest_path="${target_folder}/${item_name}_${counter}"
+                    else
+                        local name_without_ext="${item_name%.*}"
+                        local extension="${item_name##*.}"
+                        [[ "$name_without_ext" == "$extension" ]] && dest_path="${target_folder}/${item_name}_${counter}" || dest_path="${target_folder}/${name_without_ext}_${counter}.${extension}"
+                    fi
+                    counter=$((counter + 1))
+                done
+                
+                mv "$item" "$dest_path"
+            done
+            
+            rmdir "$folder" 2>/dev/null || true
+        done
+        
+        log_success "Объединение завершено"
+        merged_any_ref=true
+    fi
+}
+
+# Find exact matches in subfolders (level 2+)
+find_subfolder_matches() {
+    local temp_file="/tmp/subfolders_$$"
+    find "$WORK_DIR" -mindepth 2 -type d -printf "%f|%p\n" 2>/dev/null | sort > "$temp_file"
+    
+    local total=$(wc -l < "$temp_file")
+    [[ $total -eq 0 ]] && { rm -f "$temp_file"; return; }
+    
+    log_info "Подпапок: $total"
+    
+    # Hash table for exact matches only
+    declare -A exact_matches
+    
+    while IFS='|' read -r name path; do
+        exact_matches["$name"]+="$path|"
+    done < "$temp_file"
+    
+    rm -f "$temp_file"
+    
+    local merged_any=false
+    
+    # Check only exact matches
+    for name in "${!exact_matches[@]}"; do
+        local paths="${exact_matches[$name]}"
+        local path_array=(${paths//|/ })
+        
+        if [[ ${#path_array[@]} -gt 1 ]]; then
+            log_info "Найдено точное совпадение: '$name'"
+            for p in "${path_array[@]}"; do
+                echo "  - $(basename "$p")"
+            done
+            
+            read -p "Объединить? (y/n): " confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                merge_exact_matches "${path_array[@]}" "$name"
+                merged_any=true
+            fi
+        fi
+    done
 }
 
 # Check and merge group of folders
@@ -128,6 +269,53 @@ check_and_merge_group() {
             fi
         done
     done
+}
+
+# Merge exact matches (for subfolders)
+merge_exact_matches() {
+    local folders=("$@")
+    local last_idx=$((${#folders[@]} - 1))
+    local folder_name="${folders[$last_idx]}"
+    unset "folders[$last_idx]"
+    
+    # Create parent folder with exact name
+    local parent_folder="${WORK_DIR}/${folder_name}"
+    if [[ ! -d "$parent_folder" ]]; then
+        mkdir -p "$parent_folder"
+        log_info "Создана папка: $(basename "$parent_folder")"
+    fi
+    
+    # Move content from all folders
+    for folder in "${folders[@]}"; do
+        [[ ! -d "$folder" ]] && continue
+        
+        log_info "Перемещение содержимого из $(basename "$folder")"
+        
+        for item in "$folder"/*; do
+            [[ -e "$item" ]] || continue
+            local item_name=$(basename "$item")
+            local dest_path="${parent_folder}/${item_name}"
+            
+            # Handle conflicts
+            local counter=1
+            while [[ -e "$dest_path" ]]; do
+                if [[ -d "$item" ]]; then
+                    dest_path="${parent_folder}/${item_name}_${counter}"
+                else
+                    local name_without_ext="${item_name%.*}"
+                    local extension="${item_name##*.}"
+                    [[ "$name_without_ext" == "$extension" ]] && dest_path="${parent_folder}/${item_name}_${counter}" || dest_path="${parent_folder}/${name_without_ext}_${counter}.${extension}"
+                fi
+                counter=$((counter + 1))
+            done
+            
+            mv "$item" "$dest_path"
+        done
+        
+        rmdir "$folder" 2>/dev/null || true
+    done
+    
+    log_success "Объединение завершено"
 }
 
 # Merge content from child folders to parent

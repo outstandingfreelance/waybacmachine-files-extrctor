@@ -485,11 +485,12 @@ show_main_menu() {
     echo "1) Извлечь файлы и папки из папок первого уровня"
     echo "2) Объединить папки с похожими названиями"
     echo "3) Проверить дубликаты файлов по хэшу"
-    echo "4) Выполнить все шаги последовательно"
-    echo "5) Выход"
+    echo "4) Умное объединение папок (быстрый алгоритм)"
+    echo "5) Выполнить все шаги последовательно"
+    echo "6) Выход"
     echo
     
-    read -p "Введите ваш выбор (1-5): " choice
+    read -p "Введите ваш выбор (1-6): " choice
     
     case $choice in
         1)
@@ -517,12 +518,20 @@ show_main_menu() {
             show_main_menu
             ;;
         4)
-            run_all_steps
+            run_fast_merge
+            echo
+            show_final_statistics
             echo
             read -p "Нажмите Enter для возврата в меню..."
             show_main_menu
             ;;
         5)
+            run_all_steps
+            echo
+            read -p "Нажмите Enter для возврата в меню..."
+            show_main_menu
+            ;;
+        6)
             log_info "Завершение работы скрипта"
             exit 0
             ;;
@@ -531,6 +540,24 @@ show_main_menu() {
             show_main_menu
             ;;
     esac
+}
+
+# Function to run fast merge
+run_fast_merge() {
+    log_info "Запуск умного объединения папок..."
+    
+    # Check if merge_folders_fast.sh exists
+    local merge_script="${SCRIPT_DIR}/merge_folders_fast.sh"
+    if [[ ! -f "$merge_script" ]]; then
+        log_error "Скрипт merge_folders_fast.sh не найден"
+        return 1
+    fi
+    
+    # Make sure it's executable
+    chmod +x "$merge_script"
+    
+    # Run the fast merge script
+    "$merge_script"
 }
 
 # Function to run all steps sequentially
