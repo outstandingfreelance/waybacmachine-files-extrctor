@@ -15,7 +15,7 @@ WORK_DIR="$(pwd)"
 log_info() { echo -e "${BLUE}[ИНФО]${NC} $1"; }
 log_success() { echo -e "${GREEN}[УСПЕХ]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[ПРЕДУПРЕЖДЕНИЕ]${NC} $1"; }
-
+ 
 # Функция поиска общего префикса по буквам
 find_common_prefix() {
     local folders=("$@")
