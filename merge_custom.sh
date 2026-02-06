@@ -110,12 +110,13 @@ merge_parent_folders() {
     
     # Рекурсивно применяем ту же функцию к подпапкам в созданной папке
     log_info "Проверяю подпапки в созданной папке..."
-    recursive_merge_subfolders "$target_folder"
+    recursive_merge_subfolders "$target_folder" "$prefix"
 }
 
 # Рекурсивно объединяем подпапки с префиксом
 recursive_merge_subfolders() {
     local current_folder="$1"
+    local search_prefix="$2"  # Добавляем передачу префикса
     
     # Ищем подпапки в текущей папке
     local temp_file="/tmp/subfolders_recursive_$$"
@@ -132,7 +133,7 @@ recursive_merge_subfolders() {
         local folder_name=$(basename "$folder")
         
         # Ищем папки содержащие префикс
-        if [[ "$folder_name" == *"$prefix"* ]]; then
+        if [[ "$folder_name" == *"$search_prefix"* ]]; then
             # Ищем другие папки с таким же префиксом
             local matching_folders=("$folder")
             processed_folders+="$folder|"
@@ -143,7 +144,7 @@ recursive_merge_subfolders() {
                 [[ ! -d "$other_folder" ]] && continue
                 
                 local other_name=$(basename "$other_folder")
-                if [[ "$other_name" == *"$prefix"* ]]; then
+                if [[ "$other_name" == *"$search_prefix"* ]]; then
                     matching_folders+=("$other_folder")
                     processed_folders+="$other_folder|"
                 fi
@@ -151,11 +152,14 @@ recursive_merge_subfolders() {
             
             # Если нашли больше 1 папки с префиксом - объединяем
             if [[ ${#matching_folders[@]} -gt 1 ]]; then
-                log_info "Найдены папки с префиксом '$prefix' в '$(basename "$current_folder")': ${#matching_folders[@]} шт"
+                log_info "Найдены папки с префиксом '$search_prefix' в '$(basename "$current_folder")': ${#matching_folders[@]} шт"
                 
                 # Объединяем подпапки
-                merge_subfolder_group_recursive "${matching_folders[@]}" "$current_folder"
+                merge_subfolder_group_recursive "${matching_folders[@]}" "$current_folder" "$search_prefix"
                 merged_any=true
+                
+                # Выходим из цикла чтобы не обрабатывать повторно
+                break
             fi
         fi
     done < "$temp_file"
@@ -165,24 +169,26 @@ recursive_merge_subfolders() {
     # Рекурсивно проверяем подпапки следующего уровня
     if [[ "$merged_any" == true ]]; then
         log_info "Повторная проверка подпапок в '$(basename "$current_folder")'..."
-        recursive_merge_subfolders "$current_folder"
+        recursive_merge_subfolders "$current_folder" "$search_prefix"
     fi
 }
 
 # Объединяем группу подпапок рекурсивно
 merge_subfolder_group_recursive() {
     local folders=("$@")
+    local last_idx=$((${#folders[@]} - 2))
     local last_idx=$((${#folders[@]} - 1))
     local parent_folder="${folders[$last_idx]}"
     unset "folders[$last_idx]"
     
     # Создаем целевую папку с префиксом
-    local target_folder="${parent_folder}/${prefix}"
+    local search_prefix="$2"
+    local target_folder="${parent_folder}/${search_prefix}"
     
     # Создаем целевую папку если нет
     [[ ! -d "$target_folder" ]] && mkdir -p "$target_folder"
     
-    log_info "Объединяю подпапки с префиксом '$prefix' в '$(basename "$parent_folder")'"
+    log_info "Объединяю подпапки с префиксом '$search_prefix' в '$(basename "$parent_folder")'"
     
     # Перемещаем содержимое
     for source_folder in "${folders[@]}"; do
@@ -215,7 +221,8 @@ merge_subfolder_group_recursive() {
 
 # Ищем дубликаты подпапок по префиксу
 find_and_merge_subfolders() {
-    log_info "Поиск подпапок с префиксом '$prefix'..."
+    local search_prefix="$1"  # Принимаем префикс как параметр
+    log_info "Поиск подпапок с префиксом '$search_prefix'..."
     
     # Создаем временный файл со всеми подпапками
     local temp_file="/tmp/subfolders_$$"
@@ -232,7 +239,7 @@ find_and_merge_subfolders() {
         local folder_name=$(basename "$folder")
         
         # Ищем папки содержащие префикс
-        if [[ "$folder_name" == *"$prefix"* ]]; then
+        if [[ "$folder_name" == *"$search_prefix"* ]]; then
             # Ищем другие папки с таким же префиксом
             local matching_folders=("$folder")
             processed_folders+="$folder|"
@@ -243,7 +250,7 @@ find_and_merge_subfolders() {
                 [[ ! -d "$other_folder" ]] && continue
                 
                 local other_name=$(basename "$other_folder")
-                if [[ "$other_name" == *"$prefix"* ]]; then
+                if [[ "$other_name" == *"$search_prefix"* ]]; then
                     matching_folders+=("$other_folder")
                     processed_folders+="$other_folder|"
                 fi
@@ -251,7 +258,7 @@ find_and_merge_subfolders() {
             
             # Если нашли больше 1 папки с префиксом - объединяем
             if [[ ${#matching_folders[@]} -gt 1 ]]; then
-                log_info "Найдены подпапки с префиксом '$prefix': ${#matching_folders[@]} шт"
+                log_info "Найдены подпапки с префиксом '$search_prefix': ${#matching_folders[@]} шт"
                 
                 # Объединяем подпапки
                 merge_subfolder_group "${matching_folders[@]}"
@@ -262,7 +269,7 @@ find_and_merge_subfolders() {
     
     rm -f "$temp_file"
     
-    [[ "$merged_any" == false ]] && log_info "Подпапок с префиксом '$prefix' не найдено"
+    [[ "$merged_any" == false ]] && log_info "Подпапок с префиксом '$search_prefix' не найдено"
 }
 
 # Объединяем группу подпапок
@@ -316,7 +323,7 @@ main() {
     echo
     
     # Шаг 2: Объединяем подпапки с одинаковыми именами
-    find_and_merge_subfolders
+    find_and_merge_subfolders "$prefix"
     echo
     
     log_success "Все операции завершены!"
