@@ -107,58 +107,82 @@ merge_parent_folders() {
     done
     
     log_success "Родительские папки объединены"
+    
+    # Рекурсивно применяем ту же функцию к подпапкам в созданной папке
+    log_info "Проверяю подпапки в созданной папке..."
+    recursive_merge_subfolders "$target_folder"
 }
 
-# Ищем дубликаты подпапок по точному совпадению
-find_and_merge_subfolders() {
-    log_info "Поиск дубликатов подпапок..."
+# Рекурсивно объединяем подпапки с префиксом
+recursive_merge_subfolders() {
+    local current_folder="$1"
     
-    # Создаем временный файл со всеми подпапками
-    local temp_file="/tmp/subfolders_$$"
-    find "$WORK_DIR" -mindepth 2 -type d > "$temp_file"
+    # Ищем подпапки в текущей папке
+    local temp_file="/tmp/subfolders_recursive_$$"
+    find "$current_folder" -maxdepth 1 -type d -not -path "$current_folder" > "$temp_file"
     
-    # Создаем хеш-таблицу для группировки
-    declare -A folder_groups
+    # Группируем папки по префиксу (как у родителей)
+    local merged_any=false
+    local processed_folders=""
     
     while IFS= read -r folder; do
+        [[ ! -d "$folder" ]] && continue
+        [[ "$processed_folders" == *"$folder"* ]] && continue
+        
         local folder_name=$(basename "$folder")
-        folder_groups["$folder_name"]+="$folder|"
+        
+        # Ищем папки содержащие префикс
+        if [[ "$folder_name" == *"$prefix"* ]]; then
+            # Ищем другие папки с таким же префиксом
+            local matching_folders=("$folder")
+            processed_folders+="$folder|"
+            
+            while IFS= read -r other_folder; do
+                [[ "$other_folder" == "$folder" ]] && continue
+                [[ "$processed_folders" == *"$other_folder"* ]] && continue
+                [[ ! -d "$other_folder" ]] && continue
+                
+                local other_name=$(basename "$other_folder")
+                if [[ "$other_name" == *"$prefix"* ]]; then
+                    matching_folders+=("$other_folder")
+                    processed_folders+="$other_folder|"
+                fi
+            done < "$temp_file"
+            
+            # Если нашли больше 1 папки с префиксом - объединяем
+            if [[ ${#matching_folders[@]} -gt 1 ]]; then
+                log_info "Найдены папки с префиксом '$prefix' в '$(basename "$current_folder")': ${#matching_folders[@]} шт"
+                
+                # Объединяем подпапки
+                merge_subfolder_group_recursive "${matching_folders[@]}" "$current_folder"
+                merged_any=true
+            fi
+        fi
     done < "$temp_file"
     
     rm -f "$temp_file"
     
-    # Объединяем группы с одинаковыми именами
-    local merged_any=false
-    for folder_name in "${!folder_groups[@]}"; do
-        local folders="${folder_groups[$folder_name]}"
-        local folder_array=(${folders//|/ })
-        
-        # Если в группе больше 1 папки - объединяем
-        if [[ ${#folder_array[@]} -gt 1 ]]; then
-            log_info "Найдены дубликаты: '$folder_name' (${#folder_array[@]} шт)"
-            
-            # Объединяем подпапки
-            merge_subfolder_group "${folder_array[@]}" "$folder_name"
-            merged_any=true
-        fi
-    done
-    
-    [[ "$merged_any" == false ]] && log_info "Дубликатов подпапок не найдено"
+    # Рекурсивно проверяем подпапки следующего уровня
+    if [[ "$merged_any" == true ]]; then
+        log_info "Повторная проверка подпапок в '$(basename "$current_folder")'..."
+        recursive_merge_subfolders "$current_folder"
+    fi
 }
 
-# Объединяем группу подпапок
-merge_subfolder_group() {
+# Объединяем группу подпапок рекурсивно
+merge_subfolder_group_recursive() {
     local folders=("$@")
     local last_idx=$((${#folders[@]} - 1))
-    local folder_name="${folders[$last_idx]}"
+    local parent_folder="${folders[$last_idx]}"
     unset "folders[$last_idx]"
     
-    local target_folder="${WORK_DIR}/${folder_name}"
+    # Создаем целевую папку с префиксом
+    local target_folder="${parent_folder}/${prefix}"
     
     # Создаем целевую папку если нет
     [[ ! -d "$target_folder" ]] && mkdir -p "$target_folder"
     
-    log_info "Объединяю подпапки '$folder_name'"
+    log_info "Объединяю подпапки с префиксом '$prefix' в '$(basename "$parent_folder")'"
     
     # Перемещаем содержимое
     for source_folder in "${folders[@]}"; do
@@ -166,7 +190,116 @@ merge_subfolder_group() {
         
         for item in "$source_folder"/*; do
             [[ -e "$item" ]] || continue
-            mv "$item" "$target_folder/"
+            local item_name=$(basename "$item")
+            local dest_path="${target_folder}/${item_name}"
+            
+            # Решаем конфликты имен
+            local counter=1
+            while [[ -e "$dest_path" ]]; do
+                if [[ -d "$item" ]]; then
+                    dest_path="${target_folder}/${item_name}_${counter}"
+                else
+                    local name="${item_name%.*}"
+                    local ext="${item_name##*.}"
+                    [[ "$name" == "$ext" ]] && dest_path="${target_folder}/${item_name}_${counter}" || dest_path="${target_folder}/${name}_${counter}.${ext}"
+                fi
+                counter=$((counter + 1))
+            done
+            
+            mv "$item" "$dest_path"
+        done
+        
+        rmdir "$source_folder" 2>/dev/null || true
+    done
+}
+
+# Ищем дубликаты подпапок по префиксу
+find_and_merge_subfolders() {
+    log_info "Поиск подпапок с префиксом '$prefix'..."
+    
+    # Создаем временный файл со всеми подпапками
+    local temp_file="/tmp/subfolders_$$"
+    find "$WORK_DIR" -mindepth 2 -type d > "$temp_file"
+    
+    # Группируем папки по префиксу
+    local merged_any=false
+    local processed_folders=""
+    
+    while IFS= read -r folder; do
+        [[ ! -d "$folder" ]] && continue
+        [[ "$processed_folders" == *"$folder"* ]] && continue
+        
+        local folder_name=$(basename "$folder")
+        
+        # Ищем папки содержащие префикс
+        if [[ "$folder_name" == *"$prefix"* ]]; then
+            # Ищем другие папки с таким же префиксом
+            local matching_folders=("$folder")
+            processed_folders+="$folder|"
+            
+            while IFS= read -r other_folder; do
+                [[ "$other_folder" == "$folder" ]] && continue
+                [[ "$processed_folders" == *"$other_folder"* ]] && continue
+                [[ ! -d "$other_folder" ]] && continue
+                
+                local other_name=$(basename "$other_folder")
+                if [[ "$other_name" == *"$prefix"* ]]; then
+                    matching_folders+=("$other_folder")
+                    processed_folders+="$other_folder|"
+                fi
+            done < "$temp_file"
+            
+            # Если нашли больше 1 папки с префиксом - объединяем
+            if [[ ${#matching_folders[@]} -gt 1 ]]; then
+                log_info "Найдены подпапки с префиксом '$prefix': ${#matching_folders[@]} шт"
+                
+                # Объединяем подпапки
+                merge_subfolder_group "${matching_folders[@]}"
+                merged_any=true
+            fi
+        fi
+    done < "$temp_file"
+    
+    rm -f "$temp_file"
+    
+    [[ "$merged_any" == false ]] && log_info "Подпапок с префиксом '$prefix' не найдено"
+}
+
+# Объединяем группу подпапок
+merge_subfolder_group() {
+    local folders=("$@")
+    
+    # Создаем целевую папку с префиксом
+    local target_folder="${WORK_DIR}/${prefix}"
+    
+    # Создаем целевую папку если нет
+    [[ ! -d "$target_folder" ]] && mkdir -p "$target_folder"
+    
+    log_info "Объединяю подпапки с префиксом '$prefix'"
+    
+    # Перемещаем содержимое
+    for source_folder in "${folders[@]}"; do
+        [[ "$source_folder" == "$target_folder" ]] && continue
+        
+        for item in "$source_folder"/*; do
+            [[ -e "$item" ]] || continue
+            local item_name=$(basename "$item")
+            local dest_path="${target_folder}/${item_name}"
+            
+            # Решаем конфликты имен
+            local counter=1
+            while [[ -e "$dest_path" ]]; do
+                if [[ -d "$item" ]]; then
+                    dest_path="${target_folder}/${item_name}_${counter}"
+                else
+                    local name="${item_name%.*}"
+                    local ext="${item_name##*.}"
+                    [[ "$name" == "$ext" ]] && dest_path="${target_folder}/${item_name}_${counter}" || dest_path="${target_folder}/${name}_${counter}.${ext}"
+                fi
+                counter=$((counter + 1))
+            done
+            
+            mv "$item" "$dest_path"
         done
         
         rmdir "$source_folder" 2>/dev/null || true
