@@ -16,6 +16,27 @@ log_info() { echo -e "${BLUE}[ИНФО]${NC} $1"; }
 log_success() { echo -e "${GREEN}[УСПЕХ]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[ПРЕДУПРЕЖДЕНИЕ]${NC} $1"; }
 
+# Функция получения следующего номера для файла (правильная логика!)
+get_next_file_number() {
+    local target_folder="$1"
+    local base_name="$2"
+    local max_num=0
+    
+    # Ищем все файлы И папки с таким базовым именем
+    for item in "$target_folder"/${base_name}*; do
+        [[ -e "$item" ]] || continue
+        
+        local itemname=$(basename "$item")
+        # Проверяем есть ли постфикс _N (работает с файлами и папками)
+        if [[ "$itemname" =~ ^${base_name}_([0-9]+)(\.|$) ]]; then
+            local num="${BASH_REMATCH[1]}"
+            [[ $num -gt $max_num ]] && max_num=$num
+        fi
+    done
+    
+    echo $((max_num + 1))
+}
+
 # Получаем префикс от пользователя
 get_prefix() {
     echo -e "${BLUE}Merge Tool${NC}"
@@ -86,9 +107,10 @@ merge_parent_folders() {
             local item_name=$(basename "$item")
             local dest_path="${target_folder}/${item_name}"
             
-            # Решаем конфликты имен
-            local counter=1
-            while [[ -e "$dest_path" ]]; do
+            # Решаем конфликты имен - правильная логика!
+            if [[ -e "$dest_path" ]]; then
+                local counter=$(get_next_file_number "$target_folder" "$item_name")
+                
                 if [[ -d "$item" ]]; then
                     dest_path="${target_folder}/${item_name}_${counter}"
                 else
@@ -96,8 +118,7 @@ merge_parent_folders() {
                     local ext="${item_name##*.}"
                     [[ "$name" == "$ext" ]] && dest_path="${target_folder}/${item_name}_${counter}" || dest_path="${target_folder}/${name}_${counter}.${ext}"
                 fi
-                counter=$((counter + 1))
-            done
+            fi
             
             mv "$item" "$dest_path"
         done
@@ -176,7 +197,6 @@ recursive_merge_subfolders() {
 # Объединяем группу подпапок рекурсивно
 merge_subfolder_group_recursive() {
     local folders=("$@")
-    local last_idx=$((${#folders[@]} - 2))
     local last_idx=$((${#folders[@]} - 1))
     local parent_folder="${folders[$last_idx]}"
     unset "folders[$last_idx]"
@@ -199,9 +219,10 @@ merge_subfolder_group_recursive() {
             local item_name=$(basename "$item")
             local dest_path="${target_folder}/${item_name}"
             
-            # Решаем конфликты имен
-            local counter=1
-            while [[ -e "$dest_path" ]]; do
+            # Решаем конфликты имен - правильная логика!
+            if [[ -e "$dest_path" ]]; then
+                local counter=$(get_next_file_number "$target_folder" "$item_name")
+                
                 if [[ -d "$item" ]]; then
                     dest_path="${target_folder}/${item_name}_${counter}"
                 else
@@ -209,8 +230,7 @@ merge_subfolder_group_recursive() {
                     local ext="${item_name##*.}"
                     [[ "$name" == "$ext" ]] && dest_path="${target_folder}/${item_name}_${counter}" || dest_path="${target_folder}/${name}_${counter}.${ext}"
                 fi
-                counter=$((counter + 1))
-            done
+            fi
             
             mv "$item" "$dest_path"
         done
@@ -272,19 +292,16 @@ find_and_merge_subfolders() {
     [[ "$merged_any" == false ]] && log_info "Подпапок с префиксом '$search_prefix' не найдено"
 }
 
-# Объединяем группу подпапок
+# Объединяем группу подпапок (для вложенных)
 merge_subfolder_group() {
     local folders=("$@")
+    local last_idx=$((${#folders[@]} - 1))
+    local target_folder="${folders[$last_idx]}"
+    unset "folders[$last_idx]"
     
-    # Создаем целевую папку с префиксом
-    local target_folder="${WORK_DIR}/${prefix}"
+    log_info "Объединяю подпапки в '$(basename "$target_folder")'"
     
-    # Создаем целевую папку если нет
-    [[ ! -d "$target_folder" ]] && mkdir -p "$target_folder"
-    
-    log_info "Объединяю подпапки с префиксом '$prefix'"
-    
-    # Перемещаем содержимое
+    # Перемещаем содержимое из source_folders в target_folder
     for source_folder in "${folders[@]}"; do
         [[ "$source_folder" == "$target_folder" ]] && continue
         
@@ -293,9 +310,10 @@ merge_subfolder_group() {
             local item_name=$(basename "$item")
             local dest_path="${target_folder}/${item_name}"
             
-            # Решаем конфликты имен
-            local counter=1
-            while [[ -e "$dest_path" ]]; do
+            # Решаем конфликты имен - правильная логика!
+            if [[ -e "$dest_path" ]]; then
+                local counter=$(get_next_file_number "$target_folder" "$item_name")
+                
                 if [[ -d "$item" ]]; then
                     dest_path="${target_folder}/${item_name}_${counter}"
                 else
@@ -303,8 +321,7 @@ merge_subfolder_group() {
                     local ext="${item_name##*.}"
                     [[ "$name" == "$ext" ]] && dest_path="${target_folder}/${item_name}_${counter}" || dest_path="${target_folder}/${name}_${counter}.${ext}"
                 fi
-                counter=$((counter + 1))
-            done
+            fi
             
             mv "$item" "$dest_path"
         done
