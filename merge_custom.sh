@@ -257,7 +257,19 @@ recursive_merge_subfolders() {
     # Рекурсивно проверяем следующий уровень
     if [[ "$merged_any" == true ]]; then
         log_info "Переход на уровень $((current_depth + 1))..."
-        recursive_merge_subfolders "$current_folder" $((current_depth + 1))
+        
+        # Находим все созданные папки с префиксами и рекурсивно обрабатываем их
+        local temp_file="/tmp/merged_folders_$$"
+        find "$current_folder" -maxdepth 1 -type d -not -path "$current_folder" > "$temp_file"
+        
+        while IFS= read -r merged_folder; do
+            [[ -d "$merged_folder" ]] && {
+                log_info "Проверяю вложенную папку: $(basename "$merged_folder")"
+                recursive_merge_subfolders "$merged_folder" $((current_depth + 1))
+            }
+        done < "$temp_file"
+        
+        rm -f "$temp_file"
     fi
 }
 
