@@ -53,11 +53,12 @@ get_prefix() {
     echo "============"
     echo
     
-    read -p "Введите префикс для поиска папок: " prefix
-    [[ -z "$prefix" ]] && { 
-        echo "Ошибка: префикс не может быть пустым" 
-        exit 1 
-    }
+    read -p "Введите префикс для поиска папок (или Enter для объединения всех папок): " prefix
+    
+    if [[ -z "$prefix" ]]; then 
+        log_info "Префикс не указан, буду объединять все папки по общим префиксам"
+        return 0
+    fi
     
     log_info "Ищу папки с префиксом: '$prefix'"
 }
@@ -154,79 +155,81 @@ recursive_merge_subfolders() {
     
     log_info "Проверка уровня $current_depth в '$(basename "$current_folder")'..."
     
-    # Ищем подпапки в текущей папке
-    local temp_file="/tmp/subfolders_recursive_$$"
-    find "$current_folder" -maxdepth 1 -type d -not -path "$current_folder" > "$temp_file"
+    local continue_search=true
     
-    # Получаем все подпапки
-    local all_subfolders=()
-    while IFS= read -r folder; do
-        [[ -d "$folder" ]] && all_subfolders+=("$(basename "$folder")")
-    done < "$temp_file"
-    
-    [[ ${#all_subfolders[@]} -lt 2 ]] && {
-        rm -f "$temp_file"
-        return
-    }
-    
-    log_info "Найдено подпапок: ${#all_subfolders[@]}"
-    
-    local processed_folders=""
-    local merged_any=false
-    
-    # Ищем группы с общими префиксами
-    for ((i=0; i<${#all_subfolders[@]}; i++)); do
-        local current_subfolder="${all_subfolders[i]}"
-        [[ "$processed_folders" == *"$current_subfolder"* ]] && continue
+    # Ищем группы и объединяем их в цикле
+    while [[ "$continue_search" == true ]]; do
+        # Ищем подпапки в текущей папке
+        local temp_file="/tmp/subfolders_recursive_$$"
+        find "$current_folder" -maxdepth 1 -type d -not -path "$current_folder" > "$temp_file"
         
-        # Ищем подпапки с общим префиксом
-        local matching_folders=("$current_subfolder")
-        processed_folders+="$current_subfolder|"
-        
-        for ((j=i+1; j<${#all_subfolders[@]}; j++)); do
-            local other_subfolder="${all_subfolders[j]}"
-            [[ "$processed_folders" == *"$other_subfolder"* ]] && continue
-            
-            # Проверяем есть ли общий префикс
-            local test_folders=("$current_subfolder" "$other_subfolder")
-            local common_prefix=$(find_common_prefix "${test_folders[@]}")
-            
-            [[ -n "$common_prefix" ]] && {
-                # Ищем все подпапки с этим префиксом
-                for ((k=0; k<${#all_subfolders[@]}; k++)); do
-                    [[ $k -eq $i ]] && continue
-                    local check_subfolder="${all_subfolders[k]}"
-                    [[ "$processed_folders" == *"$check_subfolder"* ]] && continue
-                    
-                    if [[ "$check_subfolder" == "$common_prefix"* ]]; then
-                        matching_folders+=("$check_subfolder")
-                        processed_folders+="$check_subfolder|"
-                    fi
-                done
-                
-                break
+        # Получаем все подпапки
+        local all_subfolders=()
+        while IFS= read -r folder; do
+            [[ -d "$folder" ]] && {
+                # Проверяем что папка не пустая
+                local file_count=$(find "$folder" -type f | wc -l)
+                local dir_count=$(find "$folder" -type d | wc -l)
+                [[ $((file_count + dir_count)) -gt 0 ]] && all_subfolders+=("$(basename "$folder")")
             }
-        done
+        done < "$temp_file"
         
-        # Если нашли группу с общим префиксом - объединяем
-        if [[ ${#matching_folders[@]} -gt 1 ]]; then
-            local common_prefix=$(find_common_prefix "${matching_folders[@]}")
-            [[ -n "$common_prefix" ]] && {
-                log_info "Найден общий префикс '$common_prefix': ${#matching_folders[@]} подпапок"
+        [[ ${#all_subfolders[@]} -lt 2 ]] && {
+            rm -f "$temp_file"
+            break
+        }
+        
+        log_info "Найдено подпапок: ${#all_subfolders[@]}"
+        
+        local merged_any=false
+        local processed_folders=""
+        
+        # Ищем группы с общими префиксами
+        for ((i=0; i<${#all_subfolders[@]}; i++)); do
+            local current_subfolder="${all_subfolders[i]}"
+            [[ "$processed_folders" == *"$current_subfolder"* ]] && continue
+            
+            # Ищем подпапки с общим префиксом
+            local matching_folders=("$current_subfolder")
+            processed_folders+="$current_subfolder|"
+            
+            for ((j=i+1; j<${#all_subfolders[@]}; j++)); do
+                local other_subfolder="${all_subfolders[j]}"
+                [[ "$processed_folders" == *"$other_subfolder"* ]] && continue
                 
-                # Показываем найденные подпапки
-                for folder in "${matching_folders[@]}"; do
-                    echo "  - $folder"
-                done
+                # Проверяем есть ли общий префикс
+                local test_folders=("$current_subfolder" "$other_subfolder")
+                local common_prefix=$(find_common_prefix "${test_folders[@]}")
                 
-                # Спрашиваем подтверждение
-                echo
-                echo -n "Объединить эти подпапки? (y/n): "
-                read confirm
-                log_info "Пользователь ввел: '$confirm'"
-                
-                if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                    log_info "Начинаю процесс объединения..."
+                [[ -n "$common_prefix" ]] && {
+                    # Ищем все подпапки с этим префиксом
+                    for ((k=0; k<${#all_subfolders[@]}; k++)); do
+                        [[ $k -eq $i ]] && continue
+                        local check_subfolder="${all_subfolders[k]}"
+                        [[ "$processed_folders" == *"$check_subfolder"* ]] && continue
+                        
+                        if [[ "$check_subfolder" == "$common_prefix"* ]]; then
+                            matching_folders+=("$check_subfolder")
+                            processed_folders+="$check_subfolder|"
+                        fi
+                    done
+                    
+                    break
+                }
+            done
+            
+            # Если нашли группу с общим префиксом - объединяем
+            if [[ ${#matching_folders[@]} -gt 1 ]]; then
+                local common_prefix=$(find_common_prefix "${matching_folders[@]}")
+                [[ -n "$common_prefix" ]] && {
+                    log_info "Найден общий префикс '$common_prefix': ${#matching_folders[@]} подпапок"
+                    
+                    # Показываем найденные подпапки
+                    for folder in "${matching_folders[@]}"; do
+                        echo "  - $folder"
+                    done
+                    
+                    log_info "Автоматически объединяю подпапки..."
                     
                     # Создаем массив только с папками которые нужно объединить
                     local folders_to_merge=()
@@ -235,24 +238,25 @@ recursive_merge_subfolders() {
                     done
                     
                     log_info "Папок для объединения: ${#folders_to_merge[@]}"
-                    [[ ${#folders_to_merge[@]} -eq 0 ]] && {
+                    if [[ ${#folders_to_merge[@]} -eq 0 ]]; then
                         log_warning "Нет папок для объединения (пропускаем)"
                         continue
-                    }
+                    fi
                     
                     # Объединяем в папку с общим префиксом
                     log_info "Вызываю merge_subfolders_by_prefix..."
                     merge_subfolders_by_prefix "$current_folder" "$common_prefix" "${folders_to_merge[@]}"
                     merged_any=true
                     log_info "Завершил merge_subfolders_by_prefix"
-                else
-                    log_info "Пользователь отказался от объединения"
-                fi
-            }
-        fi
+                }
+            fi
+        done
+        
+        rm -f "$temp_file"
+        
+        # Если ничего не объединили на этом уровне - выходим из цикла
+        [[ "$merged_any" == false ]] && continue_search=false
     done
-    
-    rm -f "$temp_file"
     
     # Рекурсивно проверяем следующий уровень
     if [[ "$merged_any" == true ]]; then
@@ -302,6 +306,14 @@ merge_subfolders_by_prefix() {
             continue
         }
         
+        # Проверяем что папка не пустая
+        local file_count=$(find "$full_path" -type f | wc -l)
+        local dir_count=$(find "$full_path" -type d | wc -l)
+        [[ $((file_count + dir_count)) -eq 0 ]] && {
+            log_warning "Папка пустая: $folder (пропускаю)"
+            continue
+        }
+        
         local folder_name=$(basename "$full_path")
         log_info "Перемещаю из подпапки: $folder_name"
         
@@ -343,9 +355,16 @@ main() {
     get_prefix
     echo
     
-    # Шаг 1: Объединяем родительские папки
-    find_parent_folders
-    echo
+    if [[ -z "$prefix" ]]; then
+        # Если префикс не указан - сразу объединяем все папки по общим префиксам
+        log_info "Начинаю объединение всех папок по общим префиксам..."
+        recursive_merge_subfolders "$WORK_DIR" 1
+    else
+        # Если префикс указан - сначала объединяем по префиксу, потом рекурсия
+        # Шаг 1: Объединяем родительские папки
+        find_parent_folders
+        echo
+    fi
     
     log_success "Все операции завершены!"
 }
