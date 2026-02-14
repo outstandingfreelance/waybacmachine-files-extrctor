@@ -16,31 +16,31 @@ log_info() { echo -e "${BLUE}[ИНФО]${NC} $1"; }
 log_success() { echo -e "${GREEN}[УСПЕХ]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[ПРЕДУПРЕЖДЕНИЕ]${NC} $1"; }
  
-# Функция поиска общего префикса по буквам
+# Функция поиска общего префикса по буквам (минимальный до первого _)
 find_common_prefix() {
     local folders=("$@")
     
     # Если меньше 2 папок - нет префикса
     [[ ${#folders[@]} -lt 2 ]] && return 1
     
+    # Берем первую папку как образец
     local first_folder="${folders[0]}"
     local prefix=""
     
-    # Идем по символам первой папки
-    for ((i=0; i<${#first_folder}; i++)); do
-        local char="${first_folder:$i:1}"
-        local all_match=true
-        
-        # Проверяем этот символ во всех папках
-        for folder in "${folders[@]:1}"; do
-            [[ "${folder:$i:1}" == "$char" ]] || {
-                all_match=false
-                break
-            }
-        done
-        
-        # Если все совпали - добавляем символ к префиксу
-        [[ "$all_match" == true ]] && prefix+="$char" || break
+    # Ищем символ _ в первой папке
+    local underscore_pos=$(echo "$first_folder" | grep -b -o '_' | head -1 | cut -d: -f1)
+    
+    # Если _ не найден, пропускаем группу
+    [[ -z "$underscore_pos" ]] && return 1
+    
+    # Берем часть до первого _
+    prefix="${first_folder:0:$underscore_pos}"
+    
+    # Проверяем что все папки начинаются с этого префикса
+    for folder in "${folders[@]:1}"; do
+        if [[ "$folder" != "$prefix"* ]]; then
+            return 1
+        fi
     done
     
     # Префикс должен быть хотя бы из 2 символов
