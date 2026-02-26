@@ -62,6 +62,52 @@ calculate_hash() {
     fi
 }
 
+# Recursive merge function for folders with same names
+merge_folders_recursive() {
+    local source="$1"
+    local dest="$2"
+    
+    if [[ ! -d "$dest" ]]; then
+        mv "$source" "$dest"
+        log_info "  Создана папка: $(basename "$dest")"
+        return
+    fi
+    
+    # Merge contents of source into dest
+    for item in "$source"/*; do
+        if [[ -e "$item" ]]; then
+            local item_name=$(basename "$item")
+            local dest_path="${dest}/${item_name}"
+            
+            # Handle conflicts
+            local counter=1
+            while [[ -e "$dest_path" ]]; do
+                if [[ -d "$item" ]]; then
+                    # If both are directories, merge recursively
+                    merge_folders_recursive "$item" "$dest_path"
+                    continue 2  # Skip to next item
+                else
+                    # For files, add suffix
+                    local name_without_ext="${item_name%.*}"
+                    local extension="${item_name##*.}"
+                    if [[ "$name_without_ext" == "$extension" ]]; then
+                        dest_path="${dest}/${item_name}_${counter}"
+                    else
+                        dest_path="${dest}/${name_without_ext}_${counter}.${extension}"
+                    fi
+                fi
+                counter=$((counter + 1))
+            done
+            
+            # Move item to destination
+            mv "$item" "$dest_path"
+        fi
+    done
+    
+    # Remove empty source folder
+    rmdir "$source" 2>/dev/null || true
+}
+
 # Step 1: Extract files and folders from first-level folders
 extract_files_and_folders() {
     log_info "Шаг 1: Извлечение файлов и папок из папок первого уровня..."
@@ -76,6 +122,7 @@ extract_files_and_folders() {
     
     local extracted_count=0
     local folder_count=0
+    local merged_count=0
     
     # Find all first-level directories (excluding output and temp dirs)
     for folder in "$WORK_DIR"/*; do
@@ -90,30 +137,49 @@ extract_files_and_folders() {
                     local item_name=$(basename "$item")
                     local new_path="${OUTPUT_DIR}/${item_name}"
                     
-                    # Handle name conflicts
-                    local counter=1
-                    while [[ -e "$new_path" ]]; do
-                        if [[ -d "$item" ]]; then
-                            new_path="${OUTPUT_DIR}/${item_name}_${counter}"
+                    # Check if item with same name already exists in output
+                    if [[ -e "$new_path" ]]; then
+                        if [[ -d "$item" && -d "$new_path" ]]; then
+                            # Both are directories - merge recursively
+                            log_info "  Слияние папки: $(basename "$item")"
+                            merge_folders_recursive "$item" "$new_path"
+                            merged_count=$((merged_count + 1))
                         else
-                            local name_without_ext="${item_name%.*}"
-                            local extension="${item_name##*.}"
-                            if [[ "$name_without_ext" == "$extension" ]]; then
-                                new_path="${OUTPUT_DIR}/${item_name}_${counter}"
+                            # Handle name conflicts with suffix
+                            local counter=1
+                            while [[ -e "$new_path" ]]; do
+                                if [[ -d "$item" ]]; then
+                                    new_path="${OUTPUT_DIR}/${item_name}_${counter}"
+                                else
+                                    local name_without_ext="${item_name%.*}"
+                                    local extension="${item_name##*.}"
+                                    if [[ "$name_without_ext" == "$extension" ]]; then
+                                        new_path="${OUTPUT_DIR}/${item_name}_${counter}"
+                                    else
+                                        new_path="${OUTPUT_DIR}/${name_without_ext}_${counter}.${extension}"
+                                    fi
+                                fi
+                                counter=$((counter + 1))
+                            done
+                            
+                            # Move item to output directory
+                            if [[ -d "$item" ]]; then
+                                mv "$item" "$new_path"
+                                log_info "  Извлечена папка: $(basename "$item")"
                             else
-                                new_path="${OUTPUT_DIR}/${name_without_ext}_${counter}.${extension}"
+                                mv "$item" "$new_path"
+                                log_info "  Извлечен файл: $(basename "$item")"
                             fi
                         fi
-                        counter=$((counter + 1))
-                    done
-                    
-                    # Move item to output directory
-                    if [[ -d "$item" ]]; then
-                        mv "$item" "$new_path"
-                        log_info "  Извлечена папка: $(basename "$item")"
                     else
-                        mv "$item" "$new_path"
-                        log_info "  Извлечен файл: $(basename "$item")"
+                        # No conflict - just move
+                        if [[ -d "$item" ]]; then
+                            mv "$item" "$new_path"
+                            log_info "  Извлечена папка: $(basename "$item")"
+                        else
+                            mv "$item" "$new_path"
+                            log_info "  Извлечен файл: $(basename "$item")"
+                        fi
                     fi
                     extracted_count=$((extracted_count + 1))
                 fi
@@ -125,6 +191,9 @@ extract_files_and_folders() {
     done
     
     log_success "Извлечено $extracted_count элементов из $folder_count папок"
+    if [[ $merged_count -gt 0 ]]; then
+        log_success "Объединено $merged_count папок с одинаковыми названиями"
+    fi
 }
 
 # Function to find base name without suffix
@@ -485,12 +554,11 @@ show_main_menu() {
     echo "1) Извлечь файлы и папки из папок первого уровня"
     echo "2) Объединить папки с похожими названиями"
     echo "3) Проверить дубликаты файлов по хэшу"
-    echo "4) Умное объединение папок (быстрый алгоритм)"
-    echo "5) Выполнить все шаги последовательно"
-    echo "6) Выход"
+    echo "4) Выполнить все шаги последовательно"
+    echo "5) Выход"
     echo
     
-    read -p "Введите ваш выбор (1-6): " choice
+    read -p "Введите ваш выбор (1-5): " choice
     
     case $choice in
         1)
@@ -518,20 +586,12 @@ show_main_menu() {
             show_main_menu
             ;;
         4)
-            run_fast_merge
-            echo
-            show_final_statistics
-            echo
-            read -p "Нажмите Enter для возврата в меню..."
-            show_main_menu
-            ;;
-        5)
             run_all_steps
             echo
             read -p "Нажмите Enter для возврата в меню..."
             show_main_menu
             ;;
-        6)
+        5)
             log_info "Завершение работы скрипта"
             exit 0
             ;;
@@ -540,24 +600,6 @@ show_main_menu() {
             show_main_menu
             ;;
     esac
-}
-
-# Function to run fast merge
-run_fast_merge() {
-    log_info "Запуск умного объединения папок..."
-    
-    # Check if merge_folders_fast.sh exists
-    local merge_script="${SCRIPT_DIR}/merge_folders_fast.sh"
-    if [[ ! -f "$merge_script" ]]; then
-        log_error "Скрипт merge_folders_fast.sh не найден"
-        return 1
-    fi
-    
-    # Make sure it's executable
-    chmod +x "$merge_script"
-    
-    # Run the fast merge script
-    "$merge_script"
 }
 
 # Function to run all steps sequentially
